@@ -1,18 +1,20 @@
 import os
 
-from flask import Flask, render_template, redirect, request
+from flask import Flask, render_template, redirect, request, url_for
 from flask_bootstrap import Bootstrap
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, HiddenField
 from wtforms.validators import DataRequired
-import requests
+
+import moviedb
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DB_URI')
 db = SQLAlchemy(app)
 Bootstrap(app)
+
 
 with app.app_context():
     class Movie(db.Model):
@@ -36,21 +38,20 @@ class MovieEditForm(FlaskForm):
     submit = SubmitField('Submit')
 
 
-class AddMovieForm(FlaskForm):
+class SearchForm(FlaskForm):
     title = StringField('title', validators=[DataRequired()])
-    year = StringField('year')
-    description = StringField('description')
-    rating = StringField('rating')
-    ranking = StringField('ranking')
-    review = StringField('review')
-    img_url = StringField('image url')
     submit = SubmitField('submit')
 
 
 @app.route("/")
 def home():
-    all_movies = db.session.query(Movie).all()
-    return render_template("index.html", movies=all_movies)
+    movies = db.session.execute(db.select(Movie).order_by(Movie.rating.desc())).scalars().all()
+
+    # update movie rankings to reflect current position
+    for i in range(len(movies)):
+        movies[i].ranking = i + 1
+
+    return render_template("index.html", movies=movies)
 
 
 @app.route("/edit", methods=["GET", "POST"])
@@ -85,21 +86,34 @@ def delete():
 
 @app.route('/add', methods=["GET", "POST"])
 def add():
-    form = AddMovieForm()
+    form = SearchForm()
     if request.method == "POST":
+        query = form.title.data
+
+        results = moviedb.search_movie(query)
+
+        return render_template("select.html", results=results)
+    return render_template("add.html", form=form)
+
+
+@app.route('/select')
+def select():
+    movie_id = request.args.get('movie_id')
+    if movie_id:
+        details = moviedb.get_movie_details(movie_id)
+
         new_movie = Movie(
-            title=form.title.data,
-            year=int(form.year.data),
-            description=form.description.data,
-            rating=float(form.rating.data),
-            ranking=int(form.ranking.data),
-            review=form.review.data,
-            img_url=form.img_url.data
+            title=details['title'],
+            year=details['release_date'].split('-')[0],
+            description=details['overview'],
+            rating=1.0,
+            ranking=len(db.session.query(Movie).all()) + 1,
+            review="review does not exist",
+            img_url=details['poster_path']
         )
         db.session.add(new_movie)
         db.session.commit()
-        return redirect("/")
-    return render_template("add.html", form=form)
+        return redirect(url_for('edit', id=new_movie.id))
 
 
 if __name__ == '__main__':
